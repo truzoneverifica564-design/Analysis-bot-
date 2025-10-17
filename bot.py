@@ -1,14 +1,3 @@
-"""
-Telegram Trading Assistant Bot (Render-ready)
-
-Requirements:
-- python >= 3.8
-- pip install python-telegram-bot requests pandas numpy matplotlib mplfinance
-
-Environment variables:
-- TELEGRAM_TOKEN: your @BotFather token
-- DATA_API_KEY: your TwelveData (or Alpha Vantage) API key
-"""
 
 import os
 import io
