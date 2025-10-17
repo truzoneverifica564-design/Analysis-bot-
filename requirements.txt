@@ -4,3 +4,4 @@ numpy
 matplotlib
 mplfinance
 requests
+imghdr-pure
