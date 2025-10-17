@@ -1,4 +1,3 @@
-
 import os
 import io
 import math
@@ -20,7 +19,7 @@ except Exception:
 
 # ---------------- Config ----------------
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-API_KEY = os.getenv("DATA_API_KEY")  # TwelveData or Alpha Vantage
+API_KEY = os.getenv("DATA_API_KEY")  # TwelveData
 DEFAULT_INTERVAL = "15min"
 CANDLE_THRESHOLD_PERCENT = 0.5  # % movement in last candle considered unusual
 
@@ -173,7 +172,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg.append("⚠️ Unusual activity detected — possible trap.")
                 for r in unusual["reasons"]:
                     msg.append(f"• {r}")
-                msg.append("💡 Advice: Wait for confirmation before entering.")
+                warn = "⚠️ Unusual activity detected — better WAIT."
+                msg.append(f"💡 {warn}")
             else:
                 msg.append("✅ Market Stable — you may request more analysis.")
             msg.append("Type 'send more', 'send chart', or 'buy/sell signal'.")
@@ -184,6 +184,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"Error fetching/analyzing data: {e}")
         return
 
+    # Ready state: follow-up commands
     if state in ("ready", "analyzing", "detailed"):
         df = chat_states[chat_id].get("last_df")
         pair = chat_states[chat_id].get("pair")
@@ -200,35 +201,3 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🔁 MA(20): {ma20:.5f}",
             ]
             if ma50: msg.append(f"🔁 MA(50): {ma50:.5f}")
-            msg.append(f"🛡️ S/R(20 candles): R={recent_high:.5f}, S={recent_low:.5f}")
-            msg.append("Type 'send chart' or 'buy/sell signal'.")
-            await update.message.reply_text("\n".join(msg))
-            chat_states[chat_id]["state"] = "detailed"
-            return
-
-        if low in ("send chart", "chart"):
-            await update.message.reply_text("Generating chart image...")
-            try:
-                img_bytes = generate_chart_image(df, pair)
-                bio = io.BytesIO(img_bytes)
-                bio.name = f"{pair.replace('/','')}_chart.png"
-                bio.seek(0)
-                await update.message.reply_photo(photo=bio, caption=f"{pair} - chart")
-            except Exception as e:
-                await update.message.reply_text(f"Failed to generate chart: {e}")
-            return
-
-        if low in ("buy/sell signal", "signal"):
-            closes = df["close"]
-            ma20 = closes.rolling(window=20,min_periods=1).mean().iloc[-1]
-            ma50 = closes.rolling(window=50,min_periods=1).mean().iloc[-1] if len(closes)>=50 else None
-            rsi = compute_rsi(closes)
-            last = closes.iloc[-1]
-            decision = "No clear signal — wait."
-            if ma50:
-                if ma20 > ma50 and rsi < 70:
-                    decision = "Possible BUY signal"
-                elif ma20 < ma50 and rsi > 30:
-                    decision = "Possible SELL signal"
-            unusual = detect_unusual(df)
-            warn = " ⚠️ Unusual activity —￼Enter
