@@ -6,7 +6,6 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime
-
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
 
@@ -19,7 +18,7 @@ except Exception:
 
 # ---------------- Config ----------------
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-API_KEY = os.getenv("DATA_API_KEY")  # TwelveData
+API_KEY = os.getenv("DATA_API_KEY")  # TwelveData API key
 DEFAULT_INTERVAL = "15min"
 CANDLE_THRESHOLD_PERCENT = 0.5  # % movement in last candle considered unusual
 
@@ -128,8 +127,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Steps:\n1) Type 'I want to trade now'\n2) Reply with pair, e.g. EUR/USD\n"
-        "3) Use 'send chart', 'send more', 'buy/sell signal'\nCommands: /start, /help"
+        "Steps:\n1️⃣ Type 'I want to trade now'\n2️⃣ Reply with pair (e.g., EUR/USD)\n"
+        "3️⃣ Then type 'send chart', 'send more', or 'buy/sell signal'\n\nCommands: /start, /help"
     )
 
 def ensure_chat_state(chat_id: int):
@@ -151,7 +150,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if state == "awaiting_pair":
         pair = normalize_pair(text)
         chat_states[chat_id].update({"state": "analyzing", "pair": pair})
-        await update.message.reply_text(f"Fetching data for {pair} — one moment...")
+        await update.message.reply_text(f"Fetching data for {pair} — please wait...")
         try:
             df = fetch_forex_series(pair)
             chat_states[chat_id]["last_df"] = df
@@ -170,8 +169,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 msg.append("⚠️ Unusual activity detected — possible trap.")
                 for r in unusual["reasons"]:
                     msg.append(f"• {r}")
-                warn = "⚠️ Unusual activity detected — better WAIT."
-                msg.append(f"💡 {warn}")
+                msg.append("💡 Better WAIT for confirmation.")
             else:
                 msg.append("✅ Market Stable — you may request more analysis.")
             msg.append("Type 'send more', 'send chart', or 'buy/sell signal'.")
@@ -189,7 +187,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             closes = df["close"]
             rsi = compute_rsi(closes)
             ma20 = closes.rolling(window=20, min_periods=1).mean().iloc[-1]
-            ma50 = closes.rolling(window=50, min_periods=1).mean().iloc[-1] if len(closes)>=50 else None
+            ma50 = closes.rolling(window=50, min_periods=1).mean().iloc[-1] if len(closes) >= 50 else None
             recent_high = df["high"].iloc[-20:].max()
             recent_low = df["low"].iloc[-20:].min()
             msg = [
@@ -197,7 +195,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🧭 RSI(14): {rsi:.1f}",
                 f"🔁 MA(20): {ma20:.5f}",
             ]
-            if ma50: msg.append(f"🔁 MA(50): {ma50:.5f}")
+            if ma50:
+                msg.append(f"🔁 MA(50): {ma50:.5f}")
             msg.append(f"🛡️ S/R(20 candles): R={recent_high:.5f}, S={recent_low:.5f}")
             msg.append("Type 'send chart' or 'buy/sell signal'.")
             await update.message.reply_text("\n".join(msg))
@@ -219,9 +218,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if low in ("buy/sell signal", "signal"):
             closes = df["close"]
             ma20 = closes.rolling(window=20, min_periods=1).mean().iloc[-1]
-            ma50 = closes.rolling(window=50, min_periods=1).mean().iloc[-1] if len(closes)>=50 else None
+            ma50 = closes.rolling(window=50, min_periods=1).mean().iloc[-1] if len(closes) >= 50 else None
             rsi = compute_rsi(closes)
-            last = closes.iloc[-1]
             decision = "No clear signal — wait."
             if ma50:
                 if ma20 > ma50 and rsi < 70:
@@ -232,7 +230,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             warn = "⚠️ Unusual activity detected — better WAIT." if unusual["unusual"] else ""
             msg = [f"📊 {pair} Signal", f"Decision: {decision}"]
             if warn:
-                msg.append(f"💡 {warn}")
+                msg.append(warn)
             await update.message.reply_text("\n".join(msg))
             return
 
@@ -241,10 +239,14 @@ if __name__ == "__main__":
     if TELEGRAM_TOKEN is None or API_KEY is None:
         raise RuntimeError("Environment variables TELEGRAM_TOKEN or DATA_API_KEY are not set!")
 
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
+    import asyncio
 
-    print("Bot is starting...")
-    app.run_polling()
+    async def main():
+        app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+        app.add_handler(CommandHandler("start", start_command))
+        app.add_handler(CommandHandler("help", help_command))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+        print("Bot is running...")
+        await app.run_polling()
+
+    asyncio.run(main())
