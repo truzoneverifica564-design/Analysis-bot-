@@ -7,25 +7,29 @@ import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime
 from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
+from telegram.ext import (
+    ApplicationBuilder,
+    ContextTypes,
+    MessageHandler,
+    CommandHandler,
+    filters,
+)
 
-# Optional: nicer candlestick charts
 try:
     import mplfinance as mpf
     HAVE_MPF = True
 except Exception:
     HAVE_MPF = False
 
-# ---------------- Config ----------------
+# ================== CONFIG ==================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-API_KEY = os.getenv("DATA_API_KEY")  # TwelveData API key
+API_KEY = os.getenv("DATA_API_KEY")
 DEFAULT_INTERVAL = "15min"
-CANDLE_THRESHOLD_PERCENT = 0.5  # % movement in last candle considered unusual
+CANDLE_THRESHOLD_PERCENT = 0.5
 
-# ---------------- Chat state ----------------
 chat_states = {}
 
-# ---------------- Helpers ----------------
+# ================== HELPERS ==================
 def normalize_pair(text: str) -> str:
     t = text.strip().upper().replace(" ", "").replace("-", "").replace("\\", "")
     if "/" in t:
@@ -81,10 +85,10 @@ def detect_unusual(df: pd.DataFrame) -> dict:
     rsi = compute_rsi(closes)
     if rsi >= 70:
         result["unusual"] = True
-        result["reasons"].append(f"RSI high ({rsi:.0f}) — possible overbought")
+        result["reasons"].append(f"RSI high ({rsi:.0f}) — overbought")
     elif rsi <= 30:
         result["unusual"] = True
-        result["reasons"].append(f"RSI low ({rsi:.0f}) — possible oversold")
+        result["reasons"].append(f"RSI low ({rsi:.0f}) — oversold")
     result["percent_change"] = percent_change
     result["rsi"] = rsi
     return result
@@ -116,137 +120,92 @@ def generate_chart_image(df: pd.DataFrame, pair: str, interval: str = DEFAULT_IN
         buf.seek(0)
         return buf.read()
 
-# ---------------- Handlers ----------------
+# ================== HANDLERS ==================
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    chat_states[chat_id] = {"state": "idle"}
+    chat_states[update.effective_chat.id] = {"state": "idle"}
     await update.message.reply_text(
-        "Hello — Trading Assistant ready.\n"
-        "Type 'I want to trade now' to start an analysis session."
+        "🤖 Hello — Trading Assistant ready.\nType 'I want to trade now' to start."
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Steps:\n1️⃣ Type 'I want to trade now'\n2️⃣ Reply with pair (e.g., EUR/USD)\n"
-        "3️⃣ Then type 'send chart', 'send more', or 'buy/sell signal'\n\nCommands: /start, /help"
+        "Steps:\n1) Type 'I want to trade now'\n2) Reply with a pair (e.g., EUR/USD)\n"
+        "3) Commands: 'send chart', 'send more', 'buy/sell signal'."
     )
-
-def ensure_chat_state(chat_id: int):
-    if chat_id not in chat_states:
-        chat_states[chat_id] = {"state": "idle"}
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     chat_id = update.effective_chat.id
-    ensure_chat_state(chat_id)
-    state = chat_states[chat_id].get("state", "idle")
+    state = chat_states.get(chat_id, {}).get("state", "idle")
     low = text.lower()
 
     if low.startswith("i want to trade"):
-        chat_states[chat_id]["state"] = "awaiting_pair"
-        await update.message.reply_text("Okay, I’m ready. Which pair do you want analyzed? (e.g., EUR/USD)")
+        chat_states[chat_id] = {"state": "awaiting_pair"}
+        await update.message.reply_text("Ok, I’m ready. Which pair? (e.g., EUR/USD)")
         return
 
     if state == "awaiting_pair":
         pair = normalize_pair(text)
         chat_states[chat_id].update({"state": "analyzing", "pair": pair})
-        await update.message.reply_text(f"Fetching data for {pair} — please wait...")
+        await update.message.reply_text(f"Fetching data for {pair}...")
         try:
             df = fetch_forex_series(pair)
             chat_states[chat_id]["last_df"] = df
-            last_close = df["close"].iloc[-1]
-            prev_close = df["close"].iloc[-2]
             rsi = compute_rsi(df["close"])
-            trend = "Uptrend" if last_close > df["close"].rolling(window=20, min_periods=1).mean().iloc[-1] else "Downtrend/Sideways"
             unusual = detect_unusual(df)
-            msg = [
-                f"💹 {pair} Quick Market Analysis",
-                f"📊 Current Price: {last_close:.5f}",
-                f"📈 Trend: {trend}",
-                f"🧭 RSI: {rsi:.0f}" if not math.isnan(rsi) else "🧭 RSI: N/A",
-            ]
+            last_close = df["close"].iloc[-1]
+
+            msg = [f"💹 {pair} Market Summary",
+                   f"📊 Price: {last_close:.5f}",
+                   f"🧭 RSI: {rsi:.0f}"]
+
             if unusual["unusual"]:
-                msg.append("⚠️ Unusual activity detected — possible trap.")
+                msg.append("⚠️ Unusual movement — possible trap.")
                 for r in unusual["reasons"]:
                     msg.append(f"• {r}")
-                msg.append("💡 Better WAIT for confirmation.")
             else:
-                msg.append("✅ Market Stable — you may request more analysis.")
-            msg.append("Type 'send more', 'send chart', or 'buy/sell signal'.")
+                msg.append("✅ Stable market — no trap detected.")
+
+            msg.append("Type 'send chart', 'send more', or 'buy/sell signal'.")
             await update.message.reply_text("\n".join(msg))
             chat_states[chat_id]["state"] = "ready"
         except Exception as e:
+            await update.message.reply_text(f"Error: {e}")
             chat_states[chat_id]["state"] = "idle"
-            await update.message.reply_text(f"Error fetching/analyzing data: {e}")
         return
 
-    if state in ("ready", "analyzing", "detailed"):
+    if state == "ready":
         df = chat_states[chat_id].get("last_df")
         pair = chat_states[chat_id].get("pair")
-        if low == "send more":
-            closes = df["close"]
-            rsi = compute_rsi(closes)
-            ma20 = closes.rolling(window=20, min_periods=1).mean().iloc[-1]
-            ma50 = closes.rolling(window=50, min_periods=1).mean().iloc[-1] if len(closes) >= 50 else None
-            recent_high = df["high"].iloc[-20:].max()
-            recent_low = df["low"].iloc[-20:].min()
-            msg = [
-                f"📚 {pair} Deeper Analysis",
-                f"🧭 RSI(14): {rsi:.1f}",
-                f"🔁 MA(20): {ma20:.5f}",
-            ]
-            if ma50:
-                msg.append(f"🔁 MA(50): {ma50:.5f}")
-            msg.append(f"🛡️ S/R(20 candles): R={recent_high:.5f}, S={recent_low:.5f}")
-            msg.append("Type 'send chart' or 'buy/sell signal'.")
-            await update.message.reply_text("\n".join(msg))
-            chat_states[chat_id]["state"] = "detailed"
-            return
 
         if low in ("send chart", "chart"):
-            await update.message.reply_text("Generating chart image...")
+            await update.message.reply_text("📈 Generating chart...")
             try:
-                img_bytes = generate_chart_image(df, pair)
-                bio = io.BytesIO(img_bytes)
-                bio.name = f"{pair.replace('/','')}_chart.png"
+                img = generate_chart_image(df, pair)
+                bio = io.BytesIO(img)
+                bio.name = f"{pair.replace('/','')}.png"
                 bio.seek(0)
-                await update.message.reply_photo(photo=bio, caption=f"{pair} - chart")
+                await update.message.reply_photo(photo=bio, caption=f"{pair} chart")
             except Exception as e:
-                await update.message.reply_text(f"Failed to generate chart: {e}")
-            return
+                await update.message.reply_text(f"Chart error: {e}")
 
-        if low in ("buy/sell signal", "signal"):
-            closes = df["close"]
-            ma20 = closes.rolling(window=20, min_periods=1).mean().iloc[-1]
-            ma50 = closes.rolling(window=50, min_periods=1).mean().iloc[-1] if len(closes) >= 50 else None
-            rsi = compute_rsi(closes)
-            decision = "No clear signal — wait."
-            if ma50:
-                if ma20 > ma50 and rsi < 70:
-                    decision = "Possible BUY signal"
-                elif ma20 < ma50 and rsi > 30:
-                    decision = "Possible SELL signal"
-            unusual = detect_unusual(df)
-            warn = "⚠️ Unusual activity detected — better WAIT." if unusual["unusual"] else ""
-            msg = [f"📊 {pair} Signal", f"Decision: {decision}"]
-            if warn:
-                msg.append(warn)
-            await update.message.reply_text("\n".join(msg))
-            return
+        elif low in ("buy/sell signal", "signal"):
+            rsi = compute_rsi(df["close"])
+            msg = "💡 BUY signal" if rsi < 30 else "⚠️ SELL signal" if rsi > 70 else "⏳ No clear signal — wait."
+            await update.message.reply_text(msg)
 
-# ---------------- Main ----------------
+# ================== MAIN ==================
 if __name__ == "__main__":
-    if TELEGRAM_TOKEN is None or API_KEY is None:
-        raise RuntimeError("Environment variables TELEGRAM_TOKEN or DATA_API_KEY are not set!")
-
     import asyncio
 
     async def main():
+        if not TELEGRAM_TOKEN or not API_KEY:
+            raise RuntimeError("Missing TELEGRAM_TOKEN or DATA_API_KEY in environment.")
         app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
         app.add_handler(CommandHandler("start", start_command))
         app.add_handler(CommandHandler("help", help_command))
-        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
-        print("Bot is running...")
+        app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
+        print("✅ Bot running successfully...")
         await app.run_polling()
 
     asyncio.run(main())
