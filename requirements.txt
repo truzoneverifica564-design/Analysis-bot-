@@ -1,6 +1,6 @@
 python-telegram-bot==20.6
-requests
 pandas
 numpy
 matplotlib
 mplfinance
+requests
