@@ -143,7 +143,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = chat_states[chat_id].get("state", "idle")
     low = text.lower()
 
-    # Entry trigger
     if low.startswith("i want to trade"):
         chat_states[chat_id]["state"] = "awaiting_pair"
         await update.message.reply_text("Okay, I’m ready. Which pair do you want analyzed? (e.g., EUR/USD)")
@@ -158,9 +157,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_states[chat_id]["last_df"] = df
             last_close = df["close"].iloc[-1]
             prev_close = df["close"].iloc[-2]
-            change = (last_close - prev_close) / prev_close * 100.0
             rsi = compute_rsi(df["close"])
-            trend = "Uptrend" if last_close > df["close"].rolling(window=20,min_periods=1).mean().iloc[-1] else "Downtrend/Sideways"
+            trend = "Uptrend" if last_close > df["close"].rolling(window=20, min_periods=1).mean().iloc[-1] else "Downtrend/Sideways"
             unusual = detect_unusual(df)
             msg = [
                 f"💹 {pair} Quick Market Analysis",
@@ -184,15 +182,14 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"Error fetching/analyzing data: {e}")
         return
 
-    # Ready state: follow-up commands
     if state in ("ready", "analyzing", "detailed"):
         df = chat_states[chat_id].get("last_df")
         pair = chat_states[chat_id].get("pair")
         if low == "send more":
             closes = df["close"]
             rsi = compute_rsi(closes)
-            ma20 = closes.rolling(window=20,min_periods=1).mean().iloc[-1]
-            ma50 = closes.rolling(window=50,min_periods=1).mean().iloc[-1] if len(closes)>=50 else None
+            ma20 = closes.rolling(window=20, min_periods=1).mean().iloc[-1]
+            ma50 = closes.rolling(window=50, min_periods=1).mean().iloc[-1] if len(closes)>=50 else None
             recent_high = df["high"].iloc[-20:].max()
             recent_low = df["low"].iloc[-20:].min()
             msg = [
@@ -201,3 +198,53 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🔁 MA(20): {ma20:.5f}",
             ]
             if ma50: msg.append(f"🔁 MA(50): {ma50:.5f}")
+            msg.append(f"🛡️ S/R(20 candles): R={recent_high:.5f}, S={recent_low:.5f}")
+            msg.append("Type 'send chart' or 'buy/sell signal'.")
+            await update.message.reply_text("\n".join(msg))
+            chat_states[chat_id]["state"] = "detailed"
+            return
+
+        if low in ("send chart", "chart"):
+            await update.message.reply_text("Generating chart image...")
+            try:
+                img_bytes = generate_chart_image(df, pair)
+                bio = io.BytesIO(img_bytes)
+                bio.name = f"{pair.replace('/','')}_chart.png"
+                bio.seek(0)
+                await update.message.reply_photo(photo=bio, caption=f"{pair} - chart")
+            except Exception as e:
+                await update.message.reply_text(f"Failed to generate chart: {e}")
+            return
+
+        if low in ("buy/sell signal", "signal"):
+            closes = df["close"]
+            ma20 = closes.rolling(window=20, min_periods=1).mean().iloc[-1]
+            ma50 = closes.rolling(window=50, min_periods=1).mean().iloc[-1] if len(closes)>=50 else None
+            rsi = compute_rsi(closes)
+            last = closes.iloc[-1]
+            decision = "No clear signal — wait."
+            if ma50:
+                if ma20 > ma50 and rsi < 70:
+                    decision = "Possible BUY signal"
+                elif ma20 < ma50 and rsi > 30:
+                    decision = "Possible SELL signal"
+            unusual = detect_unusual(df)
+            warn = "⚠️ Unusual activity detected — better WAIT." if unusual["unusual"] else ""
+            msg = [f"📊 {pair} Signal", f"Decision: {decision}"]
+            if warn:
+                msg.append(f"💡 {warn}")
+            await update.message.reply_text("\n".join(msg))
+            return
+
+# ---------------- Main ----------------
+if __name__ == "__main__":
+    if TELEGRAM_TOKEN is None or API_KEY is None:
+        raise RuntimeError("Environment variables TELEGRAM_TOKEN or DATA_API_KEY are not set!")
+
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), message_handler))
+
+    print("Bot is starting...")
+    app.run_polling()
