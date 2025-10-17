@@ -3,4 +3,4 @@ requests
 pandas
 numpy
 matplotlib
-mplfinance￼Enter
+mplfinance
